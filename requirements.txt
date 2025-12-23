@@ -4,3 +4,5 @@ pdfplumber
 python-docx
 reportlab
 google-generativeai
+pypdf
+groq
