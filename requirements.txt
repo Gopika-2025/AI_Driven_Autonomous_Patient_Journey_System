@@ -6,3 +6,4 @@ reportlab
 google-generativeai
 pypdf
 groq
+
