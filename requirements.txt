@@ -6,4 +6,8 @@ reportlab
 google-generativeai
 pypdf
 groq
+paddleocr
+paddlepaddle
+pdf2image
+Pillow
 

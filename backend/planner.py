@@ -1,146 +1,87 @@
 """
-Treatment Planner Module
+planner.py
 
-Responsibilities:
-- Generate AI-based treatment plan (Groq LLM)
-- Fallback to rule-based logic if LLM fails
-- Estimate treatment cost ONLY for detected hospital
-- Works for ANY disease
-- Streamlit Cloud compatible
+ROLE
+----
+Central orchestration layer of the AI Treatment Planner.
+
+RESPONSIBILITIES
+----------------
+1. Identify the disease / medical problem
+2. Generate treatment plan
+3. Estimate treatment cost
+4. Recommend appointment & follow-up
+
+This file DOES NOT handle UI or extraction.
 """
 
-from llm_client import call_llm
+from backend.treatment_llm import generate_treatment_plan_llm
+from backend.cost_estimator import estimate_cost
+from backend.appointment_planner import recommend_appointment
 
 
 # =====================================================
-# COST ESTIMATION — SINGLE HOSPITAL ONLY
+# DISEASE / PROBLEM IDENTIFICATION
 # =====================================================
-def estimate_cost_for_hospital(diagnosis: str, hospital_type: str) -> str:
-    diagnosis = diagnosis.lower()
+def infer_medical_problem(summary: dict) -> str:
+    """
+    Infer disease from extracted clinical summary.
+    """
 
-    # 1️⃣ Determine severity
-    if any(k in diagnosis for k in [
-        "stemi", "heart", "cardiac", "myocardial",
-        "stroke", "cancer", "icu", "sepsis"
-    ]):
-        base_min, base_max = 100000, 400000
+    diagnosis = summary.get("final_diagnosis", "").strip()
+    text = summary.get("clinical_summary", "").lower()
 
-    elif any(k in diagnosis for k in [
-        "pneumonia", "infection", "diabetes",
-        "hypertension", "asthma", "copd"
-    ]):
-        base_min, base_max = 20000, 80000
+    # Prefer explicit diagnosis
+    if diagnosis and diagnosis.lower() != "not mentioned":
+        return diagnosis
 
-    else:
-        base_min, base_max = 5000, 15000
+    # Heuristic inference if diagnosis missing
+    if "glucose" in text or "diabetes" in text:
+        return "Diabetes Mellitus"
 
-    # 2️⃣ Hospital cost multiplier
-    multiplier = {
-        "Government": 0.6,
-        "Mid-range Private": 1.0,
-        "Premium Private": 1.6
-    }.get(hospital_type, 1.0)
+    if "st elevation" in text or "stemi" in text or "myocardial" in text:
+        return "Acute Myocardial Infarction"
 
-    min_cost = int(base_min * multiplier)
-    max_cost = int(base_max * multiplier)
+    if "blood pressure" in text or "hypertension" in text:
+        return "Hypertension"
 
-    return f"₹{min_cost:,} – ₹{max_cost:,}"
+    if "infection" in text or "fever" in text:
+        return "Suspected Infection"
+
+    return "General Medical Condition"
 
 
 # =====================================================
-# RULE-BASED FALLBACK PLAN (NEVER FAILS)
+# FULL CARE PLAN GENERATOR
 # =====================================================
-def rule_based_plan() -> dict:
-    return {
-        "immediate_management": [
-            "Stabilize patient condition",
-            "Monitor vital signs",
-            "Manage symptoms as per standard clinical guidelines"
-        ],
-        "medications": [
-            "Initiate guideline-based medications",
-            "Adjust dosage based on patient response"
-        ],
-        "monitoring_and_investigations": [
-            "Repeat necessary laboratory investigations",
-            "Monitor disease progression"
-        ],
-        "recovery_and_rehabilitation": [
-            "Encourage gradual return to activity",
-            "Provide lifestyle modification counseling"
-        ],
-        "discharge_and_follow_up": [
-            "Discharge once clinically stable",
-            "Schedule follow-up appointments"
-        ]
-    }
+def generate_full_care_plan(
+    patient: dict,
+    summary: dict,
+    context_docs: list
+) -> dict:
+    """
+    Generate the complete care plan pipeline.
+    """
 
+    # 1️⃣ Identify medical problem
+    problem = infer_medical_problem(summary)
 
-# =====================================================
-# MAIN TREATMENT PLAN GENERATOR
-# =====================================================
-def generate_treatment_plan(patient: dict, diagnosis: dict, context: list) -> dict:
-    final_diagnosis = diagnosis.get("final_diagnosis", "Unspecified condition")
-
-    hospital = diagnosis.get("hospital", {
-        "name": "General Hospital (Bangalore)",
-        "type": "Mid-range Private"
-    })
-
-    # ===================== PROMPT =====================
-    prompt = f"""
-You are a senior clinical assistant.
-
-Patient details:
-{patient}
-
-Diagnosis:
-{final_diagnosis}
-
-Generate a structured treatment plan with:
-- Immediate Management
-- Medications
-- Monitoring and Investigations
-- Recovery and Rehabilitation
-- Discharge and Follow-up
-
-Use concise bullet points.
-"""
-
-    # ===================== LLM CALL =====================
-    llm_output = call_llm(prompt)
-
-    # ===================== PLAN LOGIC =====================
-    if not llm_output or "⚠️" in llm_output:
-        treatment_sections = rule_based_plan()
-    else:
-        treatment_sections = {
-            "ai_generated_plan": [
-                line.strip()
-                for line in llm_output.split("\n")
-                if line.strip()
-            ]
-        }
-
-    # ===================== COST ESTIMATION =====================
-    estimated_cost = estimate_cost_for_hospital(
-        final_diagnosis,
-        hospital["type"]
+    # 2️⃣ Generate treatment plan (LLM + rules)
+    treatment_plan = generate_treatment_plan_llm(
+        patient=patient,
+        problem=problem,
+        context_docs=context_docs
     )
 
-    # ===================== FINAL STRUCTURE =====================
+    # 3️⃣ Estimate cost
+    estimated_cost = estimate_cost(problem)
+
+    # 4️⃣ Recommend appointment
+    appointment = recommend_appointment(problem)
+
     return {
-        "treatment_plan": {
-            **treatment_sections,
-            "estimated_cost": [
-                f"Hospital: {hospital['name']}",
-                f"Estimated Treatment Cost: {estimated_cost}"
-            ],
-            "clinical_context_considered": (
-                [
-                    "Treatment plan informed by similar historical cases",
-                    "Relevant clinical guidelines reviewed"
-                ] if context else []
-            )
-        }
+        "identified_problem": problem,
+        "treatment_plan": treatment_plan,
+        "estimated_cost": estimated_cost,
+        "appointment": appointment
     }

@@ -1,31 +1,47 @@
 """
-Extractor Module
+extractor.py
 
-- Extracts text from PDF
-- Extracts patient details
-- Extracts diagnosis summary
-- Detects hospital from report
+ROLE
+----
+Cloud-safe extraction module for diagnostic reports.
+
+FEATURES
+--------
+- Extracts text from digitally generated PDFs
+- Detects scanned PDFs (no OCR on cloud)
+- Extracts:
+  • Patient name
+  • Age
+  • Gender
+  • Chief complaint
+  • Final diagnosis
+  • ECG findings
+- Raises clean warning for scanned PDFs
 """
 
-from pypdf import PdfReader
 import re
 import io
+from pypdf import PdfReader
 
 
 # =====================================================
-# TEXT EXTRACTION (FIXED)
+# TEXT EXTRACTION (DIGITAL PDFs ONLY)
 # =====================================================
-def extract_text_from_pdf(pdf_bytes: bytes) -> str:
-    # ✅ FIX: Wrap bytes in BytesIO
-    pdf_stream = io.BytesIO(pdf_bytes)
-
-    reader = PdfReader(pdf_stream)
+def extract_text(pdf_bytes: bytes) -> str:
+    """
+    Extract text from a digitally generated PDF.
+    OCR is intentionally NOT used (Streamlit Cloud safe).
+    """
     text = ""
 
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+    except Exception:
+        pass
 
     return text.strip()
 
@@ -34,97 +50,83 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
 # PATIENT DETAILS EXTRACTION
 # =====================================================
 def extract_patient_details(text: str) -> dict:
-    details = {
-        "name": "Unknown",
-        "age": "Unknown",
-        "gender": "Unknown"
+    def find(pattern):
+        m = re.search(pattern, text, re.I | re.S)
+        return m.group(1).strip() if m else "Not mentioned"
+
+    return {
+        "name": find(r"(?:Patient Name|Patient)\s*[:\-]?\s*([A-Za-z ]+)"),
+        "age": find(r"Age\s*[:\-]?\s*(\d+)"),
+        "gender": find(r"(?:Gender|Sex)\s*[:\-]?\s*(Male|Female)")
     }
 
-    name_match = re.search(r"Name\s*[:\-]\s*([A-Za-z ]+)", text, re.IGNORECASE)
-    if name_match:
-        details["name"] = name_match.group(1).strip()
-
-    age_match = re.search(r"Age\s*[:\-]\s*(\d{1,3})", text, re.IGNORECASE)
-    if age_match:
-        details["age"] = age_match.group(1)
-
-    gender_match = re.search(r"(Male|Female|Other)", text, re.IGNORECASE)
-    if gender_match:
-        details["gender"] = gender_match.group(1).capitalize()
-
-    return details
-
 
 # =====================================================
-# DIAGNOSIS SUMMARY EXTRACTION
+# CLINICAL SECTIONS EXTRACTION
 # =====================================================
-def extract_diagnosis_summary(text: str) -> dict:
-    diagnosis = "Diagnosis not specified"
-    summary = ""
-
-    diagnosis_match = re.search(
-        r"(Diagnosis|Impression|Final Diagnosis)\s*[:\-]\s*(.+)",
+def extract_chief_complaint(text: str) -> str:
+    m = re.search(
+        r"(Chief Complaint|Presenting Complaint)\s*[:\-]?\s*(.*?)(\n\n|$)",
         text,
-        re.IGNORECASE
+        re.I | re.S
     )
-
-    if diagnosis_match:
-        diagnosis = diagnosis_match.group(2).strip()
-
-    lines = text.split("\n")
-    summary_lines = [line.strip() for line in lines if len(line.strip()) > 20][:4]
-
-    summary = " ".join(summary_lines)
-
-    return {
-        "final_diagnosis": diagnosis,
-        "clinical_summary": summary
-    }
+    return m.group(2).strip() if m else "Not mentioned"
 
 
-# =====================================================
-# HOSPITAL DETECTION
-# =====================================================
-def detect_hospital(text: str) -> dict:
-    text = text.lower()
+def extract_final_diagnosis(text: str) -> str:
+    patterns = [
+        r"(FINAL DIAGNOSIS|IMPRESSION|DIAGNOSIS)\s*[:\-]?\s*(.*?)(\n\n|$)",
+        r"Conclusion\s*[:\-]?\s*(.*)"
+    ]
 
-    if "apollo" in text:
-        return {
-            "name": "Apollo Hospitals, Bannerghatta Road",
-            "type": "Premium Private"
-        }
+    for p in patterns:
+        m = re.search(p, text, re.I | re.S)
+        if m:
+            return m.group(2).strip()
 
-    if "manipal" in text:
-        return {
-            "name": "Manipal Hospital, Old Airport Road",
-            "type": "Mid-range Private"
-        }
+    return "Not mentioned"
 
-    if any(k in text for k in ["government", "medical college", "district hospital"]):
-        return {
-            "name": "Government Medical College Hospital",
-            "type": "Government"
-        }
 
-    return {
-        "name": "General Hospital (Bangalore)",
-        "type": "Mid-range Private"
-    }
+def extract_ecg_findings(text: str) -> str:
+    m = re.search(
+        r"(ECG|ECG Findings|ECG Interpretation)\s*[:\-]?\s*(.*?)(\n\n|$)",
+        text,
+        re.I | re.S
+    )
+    return m.group(2).strip() if m else "Not mentioned"
 
 
 # =====================================================
-# MAIN PIPELINE
+# MAIN PIPELINE FUNCTION
 # =====================================================
 def process_pdf(pdf_bytes: bytes) -> dict:
-    text = extract_text_from_pdf(pdf_bytes)
+    """
+    Main entry point for PDF processing.
+
+    Raises:
+        ValueError if PDF appears to be scanned.
+    """
+
+    text = extract_text(pdf_bytes)
+
+    # 🚨 HYBRID DETECTION LOGIC
+    if len(text.strip()) < 100:
+        raise ValueError(
+            "⚠️ This appears to be a scanned PDF. "
+            "Please upload a text-based (digitally generated) diagnostic report."
+        )
 
     patient_details = extract_patient_details(text)
-    summary_data = extract_diagnosis_summary(text)
-    hospital_info = detect_hospital(text)
+
+    summary_data = {
+        "chief_complaint": extract_chief_complaint(text),
+        "final_diagnosis": extract_final_diagnosis(text),
+        "ecg_findings": extract_ecg_findings(text),
+        "clinical_summary": text[:2000]
+    }
 
     return {
         "text": text,
         "details": patient_details,
-        "summary_data": summary_data,
-        "hospital": hospital_info
+        "summary_data": summary_data
     }

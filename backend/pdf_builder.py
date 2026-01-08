@@ -1,88 +1,175 @@
 """
-PDF Builder for AI Treatment Planner
+pdf_builder.py
 
-Generates a clinician-friendly Treatment Plan PDF
-from a structured treatment plan dictionary.
+ROLE
+----
+Generate a professional treatment plan PDF including:
+- Patient details
+- Diagnostic summary
+- Final diagnosis
+- Treatment plan (section-wise)
+- Estimated cost
+- Appointment recommendation
+- Disclaimer
+
+Compatible with planner.py output structure.
 """
 
-import io
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-from reportlab.lib.units import inch
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib import colors
+from datetime import datetime
 
 
-# =====================================================
-# MAIN PDF GENERATION FUNCTION
-# =====================================================
-def build_treatment_plan_pdf(treatment_plan: dict) -> io.BytesIO:
+def build_treatment_plan_pdf(
+    patient: dict,
+    summary: dict,
+    plan: dict,
+    file_name: str = "AI_Treatment_Plan_Report.pdf",
+) -> str:
     """
-    Build a Treatment Plan PDF in memory.
+    Build and save the treatment plan PDF.
 
     Args:
-        treatment_plan (dict): Structured treatment plan
-                               (treatment_plan["treatment_plan"])
+        patient (dict): {"name","age","gender"}
+        summary (dict): {"chief_complaint","final_diagnosis",...}
+        plan (dict): output from generate_full_care_plan()
+        file_name (str): output PDF name
 
     Returns:
-        io.BytesIO: PDF buffer ready for download
+        str: generated PDF filename
     """
 
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-
-    width, height = A4
-    x_margin = 0.75 * inch
-    y_position = height - 1 * inch
-
-    # ===================== TITLE =====================
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(x_margin, y_position, "AI-Generated Treatment Plan")
-    y_position -= 30
-
-    c.setFont("Helvetica", 10)
-    c.drawString(
-        x_margin,
-        y_position,
-        "This document provides a structured treatment plan based on the clinical diagnosis."
-    )
-    y_position -= 40
-
-    # ===================== CONTENT =====================
-    for section, steps in treatment_plan.items():
-        # New page check
-        if y_position < 100:
-            c.showPage()
-            c.setFont("Helvetica", 10)
-            y_position = height - 1 * inch
-
-        # Section header
-        c.setFont("Helvetica-Bold", 12)
-        section_title = section.replace("_", " ").title()
-        c.drawString(x_margin, y_position, section_title)
-        y_position -= 20
-
-        # Section content
-        c.setFont("Helvetica", 10)
-        for step in steps:
-            if y_position < 80:
-                c.showPage()
-                c.setFont("Helvetica", 10)
-                y_position = height - 1 * inch
-
-            c.drawString(x_margin + 15, y_position, f"- {step}")
-            y_position -= 15
-
-        y_position -= 15
-
-    # ===================== FOOTER =====================
-    c.setFont("Helvetica-Oblique", 8)
-    c.drawString(
-        x_margin,
-        40,
-        "Note: This AI-generated plan is for clinical decision support only "
-        "and should not replace professional medical judgment."
+    # ---------------- Document setup ----------------
+    doc = SimpleDocTemplate(
+        file_name,
+        pagesize=A4,
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=36,
+        bottomMargin=36,
     )
 
-    c.save()
-    buffer.seek(0)
+    styles = getSampleStyleSheet()
+    elements = []
 
-    return buffer
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Heading1"],
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#003366"),
+    )
+    section_style = ParagraphStyle(
+        "SectionStyle",
+        parent=styles["Heading2"],
+        textColor=colors.HexColor("#003366"),
+    )
+    normal = styles["Normal"]
+    italic = styles["Italic"]
+
+    # ---------------- Title ----------------
+    elements.append(Paragraph("AI-Assisted Treatment Plan Report", title_style))
+    elements.append(Spacer(1, 8))
+    elements.append(
+        Paragraph(
+            f"<b>Generated on:</b> {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+            normal,
+        )
+    )
+    elements.append(Spacer(1, 16))
+
+    # ---------------- Patient details ----------------
+    elements.append(Paragraph("Patient Details", section_style))
+    elements.append(Spacer(1, 8))
+
+    patient_table = Table(
+        [
+            ["Name", patient.get("name", "Not mentioned")],
+            ["Age", patient.get("age", "Not mentioned")],
+            ["Gender", patient.get("gender", "Not mentioned")],
+        ],
+        colWidths=[120, 350],
+    )
+    patient_table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+                ("FONT", (0, 0), (-1, -1), "Helvetica"),
+            ]
+        )
+    )
+    elements.append(patient_table)
+    elements.append(Spacer(1, 14))
+
+    # ---------------- Diagnostic summary ----------------
+    elements.append(Paragraph("Clinical Summary", section_style))
+    elements.append(Spacer(1, 6))
+    elements.append(
+        Paragraph(summary.get("chief_complaint", "Not mentioned"), normal)
+    )
+    elements.append(Spacer(1, 10))
+
+    elements.append(Paragraph("Final Diagnostic Impression", section_style))
+    elements.append(Spacer(1, 6))
+    elements.append(
+        Paragraph(plan.get("identified_problem", "Not mentioned"), normal)
+    )
+    elements.append(Spacer(1, 14))
+
+    # ---------------- Treatment plan ----------------
+    elements.append(Paragraph("Treatment Plan", section_style))
+    elements.append(Spacer(1, 8))
+
+    treatment_sections = plan["treatment_plan"]["treatment_sections"]
+    for section, items in treatment_sections.items():
+        elements.append(
+            Paragraph(section.replace("_", " ").title(), styles["Heading3"])
+        )
+        for item in items:
+            elements.append(Paragraph(f"- {item}", normal))
+        elements.append(Spacer(1, 6))
+
+    elements.append(Spacer(1, 14))
+
+    # ---------------- Cost estimation ----------------
+    elements.append(Paragraph("Estimated Treatment Cost", section_style))
+    elements.append(Spacer(1, 8))
+    for k, v in plan["estimated_cost"].items():
+        elements.append(
+            Paragraph(f"<b>{k.replace('_', ' ').title()}:</b> {v}", normal)
+        )
+    elements.append(Spacer(1, 14))
+
+    # ---------------- Appointment recommendation ----------------
+    elements.append(Paragraph("Appointment Recommendation", section_style))
+    elements.append(Spacer(1, 8))
+    for k, v in plan["appointment"].items():
+        elements.append(
+            Paragraph(f"<b>{k.replace('_', ' ').title()}:</b> {v}", normal)
+        )
+    elements.append(Spacer(1, 18))
+
+    # ---------------- Disclaimer ----------------
+    elements.append(Paragraph("Disclaimer", section_style))
+    elements.append(Spacer(1, 6))
+    elements.append(
+        Paragraph(
+            "This report is generated by an AI-assisted clinical decision support system. "
+            "It is intended for informational and support purposes only. Final diagnosis "
+            "and treatment decisions must be made by a licensed medical professional.",
+            italic,
+        )
+    )
+
+    # ---------------- Build PDF ----------------
+    doc.build(elements)
+    return file_name

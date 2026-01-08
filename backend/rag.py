@@ -1,69 +1,77 @@
 """
-Simple in-memory RAG (Retrieval-Augmented Generation) module.
+rag.py
 
-Stores clinical documents and retrieves relevant context
-based on a lightweight keyword-matching strategy.
+ROLE
+----
+Lightweight Retrieval-Augmented Generation (RAG) module.
 
-This is intentionally simple and Streamlit-safe.
+PURPOSE
+-------
+- Store previously processed medical reports in memory
+- Retrieve relevant past cases based on diagnosis
+- Improve treatment plan consistency
+
+NOTE
+----
+This is an in-memory RAG:
+✔ Works perfectly on Streamlit Cloud
+✔ No external database needed
+✔ Resets automatically on app restart (acceptable for demo/project)
 """
 
-import re
+from typing import List, Dict
 
 # =====================================================
-# IN-MEMORY KNOWLEDGE STORE
+# IN-MEMORY KNOWLEDGE BASE
 # =====================================================
-_RAG_STORE = []
+_KNOWLEDGE_BASE: List[Dict[str, str]] = []
 
 
 # =====================================================
-# ADD DOCUMENT TO RAG
+# ADD REPORT TO RAG
 # =====================================================
-def add_to_rag(text: str) -> None:
+def add_to_rag(text: str, diagnosis: str) -> None:
     """
-    Add a clinical document to the RAG knowledge base.
+    Add extracted report text to the knowledge base.
+
+    Args:
+        text (str): Full extracted text from report
+        diagnosis (str): Final diagnosis or inferred condition
     """
-    if text and text.strip():
-        _RAG_STORE.append(text)
+
+    if not text:
+        return
+
+    _KNOWLEDGE_BASE.append({
+        "diagnosis": (diagnosis or "").lower(),
+        "text": text[:3000]   # limit size for safety/performance
+    })
 
 
 # =====================================================
 # QUERY RAG
 # =====================================================
-def query_rag(query: str, top_k: int = 3) -> list:
+def query_rag(query: str, top_k: int = 3) -> List[str]:
     """
-    Retrieve top-k relevant documents from RAG
-    using simple keyword overlap scoring.
+    Retrieve relevant report snippets based on diagnosis.
 
     Args:
-        query (str): Search query (e.g., diagnosis)
-        top_k (int): Number of documents to return
+        query (str): Diagnosis / condition to search for
+        top_k (int): Number of similar reports to return
 
     Returns:
-        list[str]: Relevant clinical context documents
+        List[str]: Relevant report text snippets
     """
 
-    if not _RAG_STORE or not query:
+    if not query:
         return []
 
-    query_tokens = set(
-        re.findall(r"\b\w+\b", query.lower())
-    )
+    query = query.lower()
+    matches = []
 
-    scored_docs = []
+    for item in _KNOWLEDGE_BASE:
+        if query in item["diagnosis"]:
+            matches.append(item["text"])
 
-    for doc in _RAG_STORE:
-        doc_tokens = set(
-            re.findall(r"\b\w+\b", doc.lower())
-        )
-        score = len(query_tokens.intersection(doc_tokens))
-        scored_docs.append((score, doc))
-
-    # Sort by relevance score (descending)
-    scored_docs.sort(key=lambda x: x[0], reverse=True)
-
-    # Return top-k non-zero matches
-    results = [
-        doc for score, doc in scored_docs if score > 0
-    ][:top_k]
-
-    return results
+    # Return most recent matches
+    return matches[-top_k:]

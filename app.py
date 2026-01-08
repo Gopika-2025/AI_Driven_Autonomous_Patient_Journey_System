@@ -1,9 +1,8 @@
 import streamlit as st
-from datetime import date
 
 from backend.extractor import process_pdf
+from backend.planner import generate_full_care_plan
 from backend.rag import add_to_rag, query_rag
-from backend.planner import generate_treatment_plan
 from backend.pdf_builder import build_treatment_plan_pdf
 
 
@@ -12,220 +11,244 @@ from backend.pdf_builder import build_treatment_plan_pdf
 # =====================================================
 st.set_page_config(
     page_title="AI Treatment Planner",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# =====================================================
-# HERO SECTION (PPT STYLE)
-# =====================================================
-st.markdown("## 🩺 AI Treatment Planner")
-st.markdown("### Intelligent Care Pathway Assistant")
 
-st.markdown(
-    """
-    **From Diagnosis to Action — Personalized, Clinically Guided Treatment Plans**
+# =====================================================
+# GLOBAL STYLES (GREEN HEADERS + BLUE CARDS + GAP)
+# =====================================================
+st.markdown("""
+<style>
+.stApp {
+    background-color: #7CE0C3;
+}
+.block-container {
+    padding: 2rem 3rem;
+}
 
-    Upload a diagnosis report to automatically extract clinical findings,
-    generate an AI-assisted treatment plan, estimate hospital-specific costs,
-    and produce a professional medical report.
-    """
+/* Top header */
+.header {
+    background-color:#00245D;
+    color:white;
+    padding:30px;
+    border-radius:6px;
+    text-align:center;
+    margin-bottom:30px;
+}
+
+/* Green section titles */
+.section-title {
+    background-color:#5C8F3A;
+    color:white;
+    padding:14px;
+    font-size:24px;
+    font-weight:700;
+    border-radius:4px;
+    margin-top:35px;
+    margin-bottom:18px;   /* gap before blue card */
+}
+
+/* Blue info card */
+.blue-card {
+    background-color:#0071BC;
+    color:white;
+    padding:24px;
+    border-radius:6px;
+    font-size:18px;
+    line-height:1.6;
+}
+
+/* Dark blue result card */
+.blue-result {
+    background-color:#00245D;
+    color:white;
+    padding:22px;
+    border-radius:6px;
+    font-size:18px;
+    line-height:1.6;
+    margin-bottom:30px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# =====================================================
+# HEADER
+# =====================================================
+st.markdown("""
+<div class="header">
+    <h1>🩺 AI Treatment Planner — Intelligent Care Pathway Assistant</h1>
+    <p>From Diagnosis to Action — Personalized, Clinically Guided Treatment Plans</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+# =====================================================
+# SECTION: UPLOAD REPORT (INFO + UPLOAD)
+# =====================================================
+st.markdown('<div class="section-title">Upload Diagnosis Report</div>', unsafe_allow_html=True)
+
+st.markdown("""
+<div class="blue-card">
+Upload the patient’s diagnosis report. Once uploaded, the system automatically:
+<ul>
+<li>Extracts clinical information</li>
+<li>Summarizes the diagnosis</li>
+<li>Generates treatment, cost, and appointment plans</li>
+</ul>
+</div>
+""", unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader(
+    "Upload PDF Diagnosis Report",
+    type=["pdf"],
+    label_visibility="collapsed"
 )
 
-st.markdown("---")
-
-# =====================================================
-# STEP 1 — UPLOAD PDF
-# =====================================================
-st.markdown("## Step 1: Upload Diagnosis Report")
-
-st.info(
-    "Upload the diagnosis report (PDF). The system will extract patient details, "
-    "diagnosis, and hospital information."
-)
-
-uploaded = st.file_uploader(
-    "Upload Diagnosis Report (PDF)",
-    type=["pdf"]
-)
-
-if not uploaded:
-    st.warning("Please upload a diagnosis report to continue.")
+if not uploaded_file:
     st.stop()
 
-# =====================================================
-# STEP 2 — EXTRACT DIAGNOSIS
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 2: Extract Clinical Information")
 
-with st.spinner("Extracting diagnosis and hospital information..."):
-    pdf_bytes = uploaded.read()
-    extraction = process_pdf(pdf_bytes)
-
-if not extraction.get("text"):
-    st.error("Unable to extract text from the uploaded PDF.")
-    st.stop()
+# =====================================================
+# AUTOMATIC PIPELINE (NO BUTTONS)
+# =====================================================
+with st.spinner("Analyzing diagnosis report..."):
+    extraction = process_pdf(uploaded_file.read())
 
 patient = extraction["details"]
 summary = extraction["summary_data"]
-hospital = extraction["hospital"]
 
-# =====================================================
-# STEP 3 — DIAGNOSTIC REPORT SUMMARY (PPT STYLE)
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 3: Diagnostic Report Summary")
+# Automatically add to RAG
+add_to_rag(extraction["text"], summary.get("final_diagnosis", ""))
 
-st.success(f"**Final Diagnosis:** {summary.get('final_diagnosis', 'Not identified')}")
-
-with st.container():
-    st.success("✅ Clinical Summary")
-    st.write(summary.get("clinical_summary", ""))
-
-    st.success("✅ Patient Details")
-    st.write(
-        f"""
-        **Name:** {patient.get('name')}  
-        **Age:** {patient.get('age')}  
-        **Gender:** {patient.get('gender')}
-        """
-    )
-
-    st.success("✅ Reported Hospital")
-    st.write(f"🏥 **{hospital['name']}**, Bangalore")
-
-# =====================================================
-# STEP 4 — ADD TO RAG
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 4: Add Diagnosis to Knowledge Base")
-
-st.info(
-    "Store this diagnosis in the internal knowledge base to support "
-    "context-aware treatment planning."
+# Retrieve context and generate care plan
+context_docs = query_rag(summary.get("final_diagnosis", ""))
+plan = generate_full_care_plan(
+    patient=patient,
+    summary=summary,
+    context_docs=context_docs
 )
 
-if st.button("➕ Add Diagnosis to Knowledge Base"):
-    add_to_rag(extraction["text"])
-    st.success("Diagnosis successfully added to knowledge base.")
+st.session_state["care_plan"] = plan
+
 
 # =====================================================
-# STEP 5 — QUERY RAG
+# DIAGNOSTIC SUMMARY (INFO + RESULT)
 # =====================================================
-st.markdown("---")
-st.markdown("## Step 5: Retrieve Relevant Clinical Context")
+st.markdown('<div class="section-title">Diagnostic Report Summary</div>', unsafe_allow_html=True)
 
-context_docs = query_rag(summary.get("final_diagnosis", ""))
+st.markdown("""
+<div class="blue-card">
+AI-generated summary of the uploaded diagnostic report to help clinicians
+quickly understand the patient’s condition.
+</div>
+""", unsafe_allow_html=True)
 
-if context_docs:
-    with st.expander("🔍 Retrieved Clinical Context"):
-        for i, doc in enumerate(context_docs, start=1):
-            st.markdown(f"**Context {i}:**")
-            st.write(doc[:700] + "...")
-else:
-    st.info("No prior similar cases found. Proceeding without additional context.")
+st.markdown(f"""
+<div class="blue-result">
+<b>Patient Name:</b> {patient.get("name")}<br>
+<b>Age:</b> {patient.get("age")}<br>
+<b>Gender:</b> {patient.get("gender")}<br><br>
+
+<b>Chief Complaint:</b><br>
+{summary.get("chief_complaint", "Not mentioned")}<br><br>
+
+<b>Final Diagnosis:</b><br>
+{summary.get("final_diagnosis", "Not mentioned")}
+</div>
+""", unsafe_allow_html=True)
+
 
 # =====================================================
-# STEP 6 — GENERATE TREATMENT PLAN
+# HELPER FUNCTION FOR CLINICAL SECTIONS
 # =====================================================
-st.markdown("---")
-st.markdown("## Step 6: Generate Treatment Plan")
+def clinical_section(title: str, content: str):
+    st.markdown(f"""
+    <div class="section-title">{title}</div>
+    <div class="blue-result">{content}</div>
+    """, unsafe_allow_html=True)
 
-if st.button("🧠 Generate Treatment Plan"):
-    with st.spinner("Generating AI-assisted treatment plan..."):
-        plan_data = generate_treatment_plan(
-            patient=patient,
-            diagnosis={
-                "final_diagnosis": summary.get("final_diagnosis"),
-                "hospital": hospital
-            },
-            context=context_docs
+
+# =====================================================
+# CLINICAL SECTIONS
+# =====================================================
+clinical_section(
+    "1. Clinical Presentation",
+    summary.get("chief_complaint", "Not available")
+)
+
+clinical_section(
+    "2. Key Risk Factors",
+    "Smoking, hypertension, hyperlipidemia, sedentary lifestyle, family history."
+)
+
+clinical_section(
+    "3. ECG Findings",
+    summary.get("ecg_findings", "ECG findings as per report.")
+)
+
+
+# =====================================================
+# TREATMENT PLAN
+# =====================================================
+for section, steps in plan["treatment_plan"]["treatment_sections"].items():
+    clinical_section(
+        section.replace("_", " ").title(),
+        "<br>".join(steps)
+    )
+
+
+# =====================================================
+# ESTIMATED COST
+# =====================================================
+cost = plan["estimated_cost"]
+
+clinical_section(
+    "Estimated Cost",
+    f"""
+    Consultation: {cost.get("consultation")}<br><br>
+    Investigations: {cost.get("investigations")}<br><br>
+    Medications: {cost.get("medications")}<br><br>
+    Follow-up Visits: {cost.get("follow_up_cost")}<br><br>
+    Notes: {cost.get("notes")}
+    """
+)
+
+
+# =====================================================
+# APPOINTMENT RECOMMENDATION
+# =====================================================
+appt = plan["appointment"]
+
+clinical_section(
+    "Appointment Recommendation",
+    f"""
+    Urgency: {appt.get("urgency")}<br><br>
+    Specialist: {appt.get("specialist")}<br><br>
+    Timeline: {appt.get("recommended_timeline")}<br><br>
+    Follow-up Frequency: {appt.get("follow_up_frequency")}
+    """
+)
+
+
+# =====================================================
+# PDF DOWNLOAD
+# =====================================================
+st.markdown('<div class="section-title">Download Treatment Report</div>', unsafe_allow_html=True)
+
+if st.button("📄 Download Treatment Plan PDF"):
+    pdf_file = build_treatment_plan_pdf(
+        patient,
+        summary,
+        plan
+    )
+
+    with open(pdf_file, "rb") as f:
+        st.download_button(
+            "⬇️ Download PDF",
+            f,
+            file_name=pdf_file,
+            mime="application/pdf"
         )
-        st.session_state["plan_data"] = plan_data
-
-if "plan_data" not in st.session_state:
-    st.stop()
-
-treatment_plan = st.session_state["plan_data"]["treatment_plan"]
-
-# =====================================================
-# STEP 7 — DISPLAY TREATMENT PLAN (CLINICAL CARDS)
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 7: Treatment Plan")
-
-for section, items in treatment_plan.items():
-    st.markdown(f"### ✅ {section.replace('_', ' ').title()}")
-    for item in items:
-        st.markdown(f"- {item}")
-
-# =====================================================
-# STEP 8 — APPOINTMENT BOOKING (AUTO-HOSPITAL)
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 8: Appointment Booking")
-
-st.info("The appointment will be scheduled at the same hospital as the diagnosis report.")
-
-st.write(f"🏥 **Hospital:** {hospital['name']}")
-st.write("📍 **City:** Bangalore")
-
-with st.form("appointment_form"):
-    department = st.selectbox(
-        "Select Department",
-        [
-            "Cardiology",
-            "Pulmonology",
-            "General Medicine",
-            "Neurology",
-            "Orthopedics"
-        ]
-    )
-
-    appt_date = st.date_input(
-        "Select Appointment Date",
-        min_value=date.today()
-    )
-
-    appt_time = st.time_input("Select Appointment Time")
-
-    confirm_booking = st.form_submit_button("📌 Confirm Appointment")
-
-if confirm_booking:
-    st.session_state["appointment"] = {
-        "hospital": hospital["name"],
-        "department": department,
-        "date": appt_date,
-        "time": appt_time,
-        "city": "Bangalore"
-    }
-    st.success("✅ Appointment Confirmed")
-
-# Show appointment details
-if "appointment" in st.session_state:
-    appt = st.session_state["appointment"]
-    st.markdown("### 🧾 Appointment Details")
-    st.write(f"🏥 Hospital: **{appt['hospital']}**")
-    st.write(f"🩺 Department: **{appt['department']}**")
-    st.write(f"📅 Date: **{appt['date']}**")
-    st.write(f"⏰ Time: **{appt['time']}**")
-    st.write(f"📍 City: **{appt['city']}**")
-
-# =====================================================
-# STEP 9 — GENERATE & DOWNLOAD PDF
-# =====================================================
-st.markdown("---")
-st.markdown("## Step 9: Generate Treatment Report")
-
-if st.button("📄 Generate PDF Report"):
-    pdf_buffer = build_treatment_plan_pdf(treatment_plan)
-    st.session_state["pdf"] = pdf_buffer
-    st.success("Treatment report generated successfully.")
-
-if "pdf" in st.session_state:
-    st.download_button(
-        "⬇️ Download Treatment Report",
-        st.session_state["pdf"],
-        file_name="Patient_Treatment_Plan_Report.pdf",
-        mime="application/pdf"
-    )
