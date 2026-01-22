@@ -1,175 +1,150 @@
-"""
-pdf_builder.py
-
-ROLE
-----
-Generate a professional treatment plan PDF including:
-- Patient details
-- Diagnostic summary
-- Final diagnosis
-- Treatment plan (section-wise)
-- Estimated cost
-- Appointment recommendation
-- Disclaimer
-
-Compatible with planner.py output structure.
-"""
-
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
     Spacer,
-    Table,
-    TableStyle,
+    ListFlowable,
+    ListItem
 )
-from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib import colors
-from datetime import datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
 
 
-def build_treatment_plan_pdf(
-    patient: dict,
-    summary: dict,
-    plan: dict,
-    file_name: str = "AI_Treatment_Plan_Report.pdf",
-) -> str:
+def build_treatment_plan_pdf(patient: dict, summary: dict, plan: dict) -> str:
     """
-    Build and save the treatment plan PDF.
-
-    Args:
-        patient (dict): {"name","age","gender"}
-        summary (dict): {"chief_complaint","final_diagnosis",...}
-        plan (dict): output from generate_full_care_plan()
-        file_name (str): output PDF name
-
-    Returns:
-        str: generated PDF filename
+    Builds a professional, hospital-style PDF treatment report
     """
 
-    # ---------------- Document setup ----------------
+    filename = "AI_Treatment_Plan_Report.pdf"
+
     doc = SimpleDocTemplate(
-        file_name,
+        filename,
         pagesize=A4,
         rightMargin=36,
         leftMargin=36,
         topMargin=36,
-        bottomMargin=36,
+        bottomMargin=36
     )
 
     styles = getSampleStyleSheet()
-    elements = []
 
     title_style = ParagraphStyle(
         "TitleStyle",
-        parent=styles["Heading1"],
-        alignment=TA_CENTER,
-        textColor=colors.HexColor("#003366"),
+        parent=styles["Title"],
+        alignment=1
     )
+
     section_style = ParagraphStyle(
         "SectionStyle",
         parent=styles["Heading2"],
-        textColor=colors.HexColor("#003366"),
+        spaceAfter=12
     )
-    normal = styles["Normal"]
-    italic = styles["Italic"]
 
-    # ---------------- Title ----------------
-    elements.append(Paragraph("AI-Assisted Treatment Plan Report", title_style))
-    elements.append(Spacer(1, 8))
-    elements.append(
-        Paragraph(
-            f"<b>Generated on:</b> {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
-            normal,
-        )
+    normal_style = ParagraphStyle(
+        "NormalStyle",
+        parent=styles["Normal"],
+        spaceAfter=8
     )
-    elements.append(Spacer(1, 16))
 
-    # ---------------- Patient details ----------------
-    elements.append(Paragraph("Patient Details", section_style))
-    elements.append(Spacer(1, 8))
+    story = []
 
-    patient_table = Table(
-        [
-            ["Name", patient.get("name", "Not mentioned")],
-            ["Age", patient.get("age", "Not mentioned")],
-            ["Gender", patient.get("gender", "Not mentioned")],
-        ],
-        colWidths=[120, 350],
+    # -------------------------------------------------
+    # TITLE
+    # -------------------------------------------------
+    story.append(Paragraph("AI-Generated Treatment Plan", title_style))
+    story.append(Spacer(1, 0.3 * inch))
+
+    # -------------------------------------------------
+    # PATIENT DETAILS
+    # -------------------------------------------------
+    story.append(Paragraph("Patient Details", section_style))
+    story.append(Paragraph(f"<b>Name:</b> {patient.get('name')}", normal_style))
+    story.append(Paragraph(f"<b>Age:</b> {patient.get('age')}", normal_style))
+    story.append(Paragraph(f"<b>Gender:</b> {patient.get('gender')}", normal_style))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # -------------------------------------------------
+    # CLINICAL SUMMARY
+    # -------------------------------------------------
+    story.append(Paragraph("Clinical Summary", section_style))
+    story.append(Paragraph(
+        f"<b>Chief Complaint:</b> {summary.get('chief_complaint')}",
+        normal_style
+    ))
+    story.append(Paragraph(
+        f"<b>Identified Condition:</b> {plan.get('identified_problem')}",
+        normal_style
+    ))
+    story.append(Spacer(1, 0.2 * inch))
+
+    # -------------------------------------------------
+    # TREATMENT PLAN
+    # -------------------------------------------------
+    story.append(Paragraph("Treatment Plan", section_style))
+
+    treatment_sections = plan.get("treatment_plan", {}).get(
+        "treatment_sections", {}
     )
-    patient_table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
-                ("FONT", (0, 0), (-1, -1), "Helvetica"),
-            ]
-        )
-    )
-    elements.append(patient_table)
-    elements.append(Spacer(1, 14))
 
-    # ---------------- Diagnostic summary ----------------
-    elements.append(Paragraph("Clinical Summary", section_style))
-    elements.append(Spacer(1, 6))
-    elements.append(
-        Paragraph(summary.get("chief_complaint", "Not mentioned"), normal)
-    )
-    elements.append(Spacer(1, 10))
-
-    elements.append(Paragraph("Final Diagnostic Impression", section_style))
-    elements.append(Spacer(1, 6))
-    elements.append(
-        Paragraph(plan.get("identified_problem", "Not mentioned"), normal)
-    )
-    elements.append(Spacer(1, 14))
-
-    # ---------------- Treatment plan ----------------
-    elements.append(Paragraph("Treatment Plan", section_style))
-    elements.append(Spacer(1, 8))
-
-    treatment_sections = plan["treatment_plan"]["treatment_sections"]
     for section, items in treatment_sections.items():
-        elements.append(
-            Paragraph(section.replace("_", " ").title(), styles["Heading3"])
+        story.append(Paragraph(section, styles["Heading3"]))
+
+        bullet_items = [
+            ListItem(Paragraph(item, normal_style))
+            for item in items
+        ]
+
+        story.append(
+            ListFlowable(
+                bullet_items,
+                bulletType="bullet",
+                start="circle"
+            )
         )
-        for item in items:
-            elements.append(Paragraph(f"- {item}", normal))
-        elements.append(Spacer(1, 6))
+        story.append(Spacer(1, 0.15 * inch))
 
-    elements.append(Spacer(1, 14))
+    # -------------------------------------------------
+    # COST ESTIMATION
+    # -------------------------------------------------
+    cost = plan.get("estimated_cost", {})
+    story.append(Paragraph("Estimated Cost", section_style))
+    story.append(Paragraph(f"Consultation: {cost.get('consultation')}", normal_style))
+    story.append(Paragraph(f"Investigations: {cost.get('investigations')}", normal_style))
+    story.append(Paragraph(f"Medications: {cost.get('medications')}", normal_style))
+    story.append(Paragraph(f"Follow-up: {cost.get('follow_up_cost')}", normal_style))
+    story.append(Paragraph(f"Notes: {cost.get('notes')}", normal_style))
+    story.append(Spacer(1, 0.2 * inch))
 
-    # ---------------- Cost estimation ----------------
-    elements.append(Paragraph("Estimated Treatment Cost", section_style))
-    elements.append(Spacer(1, 8))
-    for k, v in plan["estimated_cost"].items():
-        elements.append(
-            Paragraph(f"<b>{k.replace('_', ' ').title()}:</b> {v}", normal)
-        )
-    elements.append(Spacer(1, 14))
+    # -------------------------------------------------
+    # APPOINTMENT PLAN
+    # -------------------------------------------------
+    appt = plan.get("appointment", {})
+    story.append(Paragraph("Follow-up & Appointment", section_style))
+    story.append(Paragraph(f"Urgency: {appt.get('urgency')}", normal_style))
+    story.append(Paragraph(f"Specialist: {appt.get('specialist')}", normal_style))
+    story.append(Paragraph(
+        f"Recommended Timeline: {appt.get('recommended_timeline')}",
+        normal_style
+    ))
+    story.append(Paragraph(
+        f"Follow-up Frequency: {appt.get('follow_up_frequency')}",
+        normal_style
+    ))
+    story.append(Spacer(1, 0.3 * inch))
 
-    # ---------------- Appointment recommendation ----------------
-    elements.append(Paragraph("Appointment Recommendation", section_style))
-    elements.append(Spacer(1, 8))
-    for k, v in plan["appointment"].items():
-        elements.append(
-            Paragraph(f"<b>{k.replace('_', ' ').title()}:</b> {v}", normal)
-        )
-    elements.append(Spacer(1, 18))
+    # -------------------------------------------------
+    # DISCLAIMER
+    # -------------------------------------------------
+    story.append(Paragraph(
+        "<i>Disclaimer: This AI-generated report is intended for clinical "
+        "decision support only. Final diagnosis and treatment decisions "
+        "must be made by a licensed medical professional.</i>",
+        styles["Italic"]
+    ))
 
-    # ---------------- Disclaimer ----------------
-    elements.append(Paragraph("Disclaimer", section_style))
-    elements.append(Spacer(1, 6))
-    elements.append(
-        Paragraph(
-            "This report is generated by an AI-assisted clinical decision support system. "
-            "It is intended for informational and support purposes only. Final diagnosis "
-            "and treatment decisions must be made by a licensed medical professional.",
-            italic,
-        )
-    )
+    # -------------------------------------------------
+    # BUILD PDF
+    # -------------------------------------------------
+    doc.build(story)
 
-    # ---------------- Build PDF ----------------
-    doc.build(elements)
-    return file_name
+    return filename

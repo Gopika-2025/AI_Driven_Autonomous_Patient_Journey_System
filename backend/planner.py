@@ -1,87 +1,153 @@
+import os
+import requests
+from typing import Dict
+import streamlit as st
+
+
+# -------------------------------------------------
+# GROQ CONFIGURATION
+# -------------------------------------------------
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+
+# -------------------------------------------------
+# SYSTEM PROMPT (DOCTOR ROLE)
+# -------------------------------------------------
+SYSTEM_PROMPT = """
+You are a senior medical doctor acting as a clinical decision support system.
+
+Rules:
+- Base all recommendations strictly on the provided medical report
+- Do NOT invent diagnoses
+- If the information is insufficient, clearly state it
+- Provide safe, evidence-based medical guidance
+- Use structured, professional clinical language
+- Do NOT include legal disclaimers in the output
 """
-planner.py
 
-ROLE
-----
-Central orchestration layer of the AI Treatment Planner.
 
-RESPONSIBILITIES
-----------------
-1. Identify the disease / medical problem
-2. Generate treatment plan
-3. Estimate treatment cost
-4. Recommend appointment & follow-up
+# -------------------------------------------------
+# LOAD GROQ API KEY (LOCAL + CLOUD SAFE)
+# -------------------------------------------------
+def get_groq_key() -> str | None:
+    # Streamlit Cloud
+    if "GROQ_API_KEY" in st.secrets:
+        return st.secrets["GROQ_API_KEY"]
 
-This file DOES NOT handle UI or extraction.
+    # Local machine (env / .env)
+    return os.getenv("GROQ_API_KEY")
+
+
+# -------------------------------------------------
+# MAIN TREATMENT PLAN GENERATOR
+# -------------------------------------------------
+def generate_full_care_plan(patient: Dict, summary: Dict) -> Dict:
+    api_key = get_groq_key()
+    if not api_key:
+        raise RuntimeError("❌ GROQ_API_KEY not found")
+
+    # Fail-safe: no diagnosis
+    if not summary.get("final_diagnosis"):
+        return {
+            "solution_type": "recommendation",
+            "identified_problem": "Insufficient diagnostic information",
+            "recommendation": [
+                "The uploaded report does not contain a clear diagnosis",
+                "Consult a qualified physician for further evaluation",
+                "Additional clinical assessment or investigations may be required"
+            ],
+            "appointment": {
+                "specialist": "General Physician",
+                "recommended_timeline": "As soon as possible"
+            }
+        }
+
+    user_prompt = f"""
+Patient Details:
+Age: {patient.get("age")}
+Gender: {patient.get("gender")}
+
+Chief Complaint:
+{summary.get("chief_complaint")}
+
+Identified Condition:
+{summary.get("final_diagnosis")}
+
+Report Type:
+{summary.get("report_type")}
+
+Generate a structured doctor-like response with the following sections:
+1. Identified medical problem
+2. Immediate care
+3. Medications (general categories only, no brand names)
+4. Monitoring and investigations
+5. Lifestyle and patient advice
+6. Follow-up and referral plan
+7. Estimated treatment cost range in INR
 """
 
-from backend.treatment_llm import generate_treatment_plan_llm
-from backend.cost_estimator import estimate_cost
-from backend.appointment_planner import recommend_appointment
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.2
+    }
 
-
-# =====================================================
-# DISEASE / PROBLEM IDENTIFICATION
-# =====================================================
-def infer_medical_problem(summary: dict) -> str:
-    """
-    Infer disease from extracted clinical summary.
-    """
-
-    diagnosis = summary.get("final_diagnosis", "").strip()
-    text = summary.get("clinical_summary", "").lower()
-
-    # Prefer explicit diagnosis
-    if diagnosis and diagnosis.lower() != "not mentioned":
-        return diagnosis
-
-    # Heuristic inference if diagnosis missing
-    if "glucose" in text or "diabetes" in text:
-        return "Diabetes Mellitus"
-
-    if "st elevation" in text or "stemi" in text or "myocardial" in text:
-        return "Acute Myocardial Infarction"
-
-    if "blood pressure" in text or "hypertension" in text:
-        return "Hypertension"
-
-    if "infection" in text or "fever" in text:
-        return "Suspected Infection"
-
-    return "General Medical Condition"
-
-
-# =====================================================
-# FULL CARE PLAN GENERATOR
-# =====================================================
-def generate_full_care_plan(
-    patient: dict,
-    summary: dict,
-    context_docs: list
-) -> dict:
-    """
-    Generate the complete care plan pipeline.
-    """
-
-    # 1️⃣ Identify medical problem
-    problem = infer_medical_problem(summary)
-
-    # 2️⃣ Generate treatment plan (LLM + rules)
-    treatment_plan = generate_treatment_plan_llm(
-        patient=patient,
-        problem=problem,
-        context_docs=context_docs
+    response = requests.post(
+        GROQ_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        timeout=60
     )
 
-    # 3️⃣ Estimate cost
-    estimated_cost = estimate_cost(problem)
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"GROQ API ERROR {response.status_code}: {response.text}"
+        )
 
-    # 4️⃣ Recommend appointment
-    appointment = recommend_appointment(problem)
+    ai_text = response.json()["choices"][0]["message"]["content"]
+
+    return _format_for_ui(summary, ai_text)
+
+
+# -------------------------------------------------
+# FORMAT AI RESPONSE FOR EXISTING UI
+# -------------------------------------------------
+def _format_for_ui(summary: Dict, ai_text: str) -> Dict:
+    lines = [
+        line.strip("-• ")
+        for line in ai_text.split("\n")
+        if line.strip()
+    ]
 
     return {
-        "identified_problem": problem,
-        "treatment_plan": treatment_plan,
-        "estimated_cost": estimated_cost,
-        "appointment": appointment
+        "solution_type": "treatment",
+        "identified_problem": summary.get(
+            "final_diagnosis",
+            "Medical condition identified"
+        ),
+        "treatment_plan": {
+            "treatment_sections": {
+                "Doctor Recommended Treatment Plan": lines
+            }
+        },
+        "estimated_cost": {
+            "consultation": "₹500 – ₹1,500",
+            "investigations": "₹2,000 – ₹10,000",
+            "medications": "₹1,000 – ₹5,000",
+            "follow_up_cost": "₹500 – ₹2,000",
+            "notes": "Estimated by AI clinician; varies by hospital and location"
+        },
+        "appointment": {
+            "urgency": "Based on clinical severity",
+            "specialist": "Relevant medical specialist",
+            "recommended_timeline": "As soon as possible",
+            "follow_up_frequency": "As advised by physician"
+        }
     }

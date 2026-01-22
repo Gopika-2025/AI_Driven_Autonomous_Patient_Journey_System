@@ -1,41 +1,20 @@
-"""
-extractor.py
-
-ROLE
-----
-Cloud-safe extraction module for diagnostic reports.
-
-FEATURES
---------
-- Extracts text from digitally generated PDFs
-- Detects scanned PDFs (no OCR on cloud)
-- Extracts:
-  • Patient name
-  • Age
-  • Gender
-  • Chief complaint
-  • Final diagnosis
-  • ECG findings
-- Raises clean warning for scanned PDFs
-"""
-
 import re
-import io
+from io import BytesIO
+from typing import Dict
+
 from pypdf import PdfReader
+from pdf2image import convert_from_bytes
+import pytesseract
+from PIL import Image
 
-
-# =====================================================
-# TEXT EXTRACTION (DIGITAL PDFs ONLY)
-# =====================================================
-def extract_text(pdf_bytes: bytes) -> str:
-    """
-    Extract text from a digitally generated PDF.
-    OCR is intentionally NOT used (Streamlit Cloud safe).
-    """
+# Tesseract path (Streamlit Cloud / Docker safe)
+pytesseract.pytesseract.tesseract_cmd = "./bin/tesseract"
+def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     text = ""
 
+    # Try digital PDF extraction
     try:
-        reader = PdfReader(io.BytesIO(pdf_bytes))
+        reader = PdfReader(BytesIO(pdf_bytes))
         for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
@@ -43,90 +22,123 @@ def extract_text(pdf_bytes: bytes) -> str:
     except Exception:
         pass
 
+    # If very little text → OCR
+    if len(text.strip()) < 200:
+        images = convert_from_bytes(
+            pdf_bytes,
+            dpi=300,
+            poppler_path="./bin/poppler"
+        )
+        for img in images:
+            text += pytesseract.image_to_string(img) + "\n"
+
     return text.strip()
+def detect_report_type(text: str) -> str:
+    t = text.lower()
 
-
-# =====================================================
-# PATIENT DETAILS EXTRACTION
-# =====================================================
-def extract_patient_details(text: str) -> dict:
-    def find(pattern):
-        m = re.search(pattern, text, re.I | re.S)
-        return m.group(1).strip() if m else "Not mentioned"
-
-    return {
-        "name": find(r"(?:Patient Name|Patient)\s*[:\-]?\s*([A-Za-z ]+)"),
-        "age": find(r"Age\s*[:\-]?\s*(\d+)"),
-        "gender": find(r"(?:Gender|Sex)\s*[:\-]?\s*(Male|Female)")
-    }
-
-
-# =====================================================
-# CLINICAL SECTIONS EXTRACTION
-# =====================================================
-def extract_chief_complaint(text: str) -> str:
-    m = re.search(
-        r"(Chief Complaint|Presenting Complaint)\s*[:\-]?\s*(.*?)(\n\n|$)",
-        text,
-        re.I | re.S
-    )
-    return m.group(2).strip() if m else "Not mentioned"
-
-
-def extract_final_diagnosis(text: str) -> str:
-    patterns = [
-        r"(FINAL DIAGNOSIS|IMPRESSION|DIAGNOSIS)\s*[:\-]?\s*(.*?)(\n\n|$)",
-        r"Conclusion\s*[:\-]?\s*(.*)"
+    radiology_keywords = [
+        "ct scan", "x-ray", "mri",
+        "ultrasound", "radiology", "imaging"
     ]
 
-    for p in patterns:
-        m = re.search(p, text, re.I | re.S)
-        if m:
-            return m.group(2).strip()
+    for k in radiology_keywords:
+        if k in t:
+            return "radiology"
+
+    return "diagnosis"
+def extract_patient_name(text: str) -> str:
+    t = text.replace("\n", " ")
+
+    match = re.search(
+        r"(Patient Name|Patient|Name)\s*[:\-]?\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2})",
+        t
+    )
+
+    if match:
+        name = match.group(2).strip()
+
+        # Remove trailing junk words
+        junk = ["patient", "age", "sex", "gender"]
+        if not any(j in name.lower() for j in junk):
+            return name
 
     return "Not mentioned"
-
-
-def extract_ecg_findings(text: str) -> str:
-    m = re.search(
-        r"(ECG|ECG Findings|ECG Interpretation)\s*[:\-]?\s*(.*?)(\n\n|$)",
+def extract_age(text: str) -> str:
+    match = re.search(r"(Age)\s*[:\-]?\s*(\d{1,3})", text, re.I)
+    return match.group(2) if match else "Not mentioned"
+def extract_gender(text: str) -> str:
+    match = re.search(
+        r"(Gender|Sex)\s*[:\-]?\s*(Male|Female|M|F)",
         text,
-        re.I | re.S
+        re.I
     )
-    return m.group(2).strip() if m else "Not mentioned"
 
+    if match:
+        g = match.group(2).upper()
+        return "Male" if g in ["M", "MALE"] else "Female"
 
-# =====================================================
-# MAIN PIPELINE FUNCTION
-# =====================================================
-def process_pdf(pdf_bytes: bytes) -> dict:
-    """
-    Main entry point for PDF processing.
+    return "Not mentioned"
+def extract_diagnosis(text: str) -> str:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    diagnosis = "Diagnosis not clearly specified"
 
-    Raises:
-        ValueError if PDF appears to be scanned.
-    """
+    for i, line in enumerate(lines):
+        if any(k in line.lower() for k in [
+            "final diagnosis", "impression",
+            "diagnosis", "conclusion"
+        ]):
+            if i + 1 < len(lines):
+                candidate = lines[i + 1]
 
-    text = extract_text(pdf_bytes)
+                stop_words = [
+                    "section", "lab", "patient",
+                    "page", "date", "signed",
+                    "imaging", "investigation"
+                ]
 
-    # 🚨 HYBRID DETECTION LOGIC
-    if len(text.strip()) < 100:
-        raise ValueError(
-            "⚠️ This appears to be a scanned PDF. "
-            "Please upload a text-based (digitally generated) diagnostic report."
-        )
+                if (
+                    len(candidate) < 100 and
+                    not any(sw in candidate.lower() for sw in stop_words)
+                ):
+                    diagnosis = candidate
+                    break
 
-    patient_details = extract_patient_details(text)
+    # Normalize normal findings
+    if diagnosis.lower().startswith("normal"):
+        diagnosis = "No abnormal findings detected"
 
-    summary_data = {
-        "chief_complaint": extract_chief_complaint(text),
-        "final_diagnosis": extract_final_diagnosis(text),
-        "ecg_findings": extract_ecg_findings(text),
-        "clinical_summary": text[:2000]
+    return diagnosis
+def extract_chief_complaint(text: str) -> str:
+    match = re.search(
+        r"(Chief Complaint|Presenting Complaint|Reason for Admission)[:\-]?\s*(.+)",
+        text,
+        re.I
+    )
+
+    return match.group(2).strip() if match else "Not mentioned"
+def process_diagnosis_report(pdf_bytes: bytes) -> Dict:
+    text = extract_text_from_pdf(pdf_bytes)
+    report_type = detect_report_type(text)
+
+    patient_details = {
+        "name": extract_patient_name(text),
+        "age": extract_age(text),
+        "gender": extract_gender(text)
     }
 
+    diagnosis = extract_diagnosis(text)
+    chief_complaint = extract_chief_complaint(text)
+
+    # Radiology fallback
+    if report_type == "radiology" and diagnosis == "Diagnosis not clearly specified":
+        diagnosis = "No acute cardiopulmonary process identified"
+
     return {
-        "text": text,
         "details": patient_details,
-        "summary_data": summary_data
+        "summary_data": {
+            "final_diagnosis": diagnosis,
+            "chief_complaint": chief_complaint,
+            "report_type": report_type
+        },
+        "raw_text": text
     }
