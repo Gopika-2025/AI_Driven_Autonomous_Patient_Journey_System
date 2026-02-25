@@ -9,3 +9,5 @@ groq
 pytesseract
 pdf2image
 Pillow
+tesseract-ocr
+opencv-python
